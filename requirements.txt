@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+pydantic
+python-pptx
+google-genai
+requests
