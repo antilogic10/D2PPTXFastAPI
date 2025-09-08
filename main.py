@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse,JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 import os
 from pptx import Presentation
@@ -170,31 +170,6 @@ def generate_ppt(req: PPTRequest):
     # Step 2: Replace placeholders
     updated_pptx =updateTemplatePlaceholders(pptx_path, 0, cleanedJson)
 
-    upload_url = "https://snapglobaleservices.com/aranca/apibackend/apis/upload-ppt"
-
-    # open pptx file in binary mode
-    with open(updated_pptx, "rb") as f:
-        files = {
-            "file": (os.path.basename(updated_pptx), f, "application/octet-stream")  # simpler name + generic mime
-        }
-        headers = {
-            "Accept": "application/json",  # tell server we expect JSON
-            "Content-Type": "application/octet-stream" # tell server about the file type
-        }
-        external_response = requests.post(upload_url, files=files, headers=headers)
-
-    # forward API response back to FastAPI client
-    try:
-        return JSONResponse(
-            content=external_response.json(),
-            status_code=external_response.status_code
-        )
-    except Exception:
-        return JSONResponse(
-            content={
-                "status": "error",
-                "message": external_response.text
-            },
-            status_code=external_response.status_code,
-        )
-
+    # Step 3: Return file
+    filename = "updated_presentation.pptx"
+    return FileResponse(updated_pptx, media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation", filename=filename)
