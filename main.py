@@ -204,4 +204,4 @@ def generate_ppt(req: PPTRequest):
     file_url = f"https://d2pptxfastapi.onrender.com/files/{public_filename}"
     return {"file_url": file_url,
             "previewURL": f"https://view.officeapps.live.com/op/embed.aspx?src={file_url}",
-            "googlePreviewUrl": f"https://docs.google.com/viewer?{file_url}=your_file&embedded=true"}
+            "googlePreviewUrl": f"https://docs.google.com/viewer?url={file_url}&embedded=true"}
