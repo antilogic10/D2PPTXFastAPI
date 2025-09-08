@@ -9,6 +9,10 @@ import requests
 import tempfile
 from datetime import datetime
 from fastapi.middleware.cors import CORSMiddleware
+import uuid
+from fastapi.staticfiles import StaticFiles
+import shutil
+
 
 app = FastAPI()
 
@@ -21,6 +25,7 @@ app.add_middleware(
     allow_headers=["*"],  # <-- allows all headers
 )
 
+app.mount("/files", StaticFiles(directory="generated_files"), name="files")
 # Pydantic model for request body
 class PPTRequest(BaseModel):
     fileUrl: str   # Name of the pptx template file
@@ -180,6 +185,23 @@ def generate_ppt(req: PPTRequest):
     # Step 2: Replace placeholders
     updated_pptx =updateTemplatePlaceholders(pptx_path, 0, cleanedJson)
 
-    # Step 3: Return file
-    filename = "updated_presentation.pptx"
-    return FileResponse(updated_pptx, media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation", filename=filename)
+    # Step 3: Generate unique filename
+    unique_id = uuid.uuid4().hex[:8]  # short UUID
+    public_filename = f"presentation_{unique_id}.pptx"
+    public_path = os.path.join("generated_files", public_filename)
+
+    # Move to public folder
+    shutil.copy(updated_pptx, public_path)
+
+    # Delete the temporary file
+    if os.path.exists(updated_pptx):
+        os.remove(updated_pptx)
+
+    if os.path.exists(pptx_path):
+        os.remove(pptx_path)
+
+    # Step 4: Return public URL
+    file_url = f"https://d2pptxfastapi.onrender.com/files/{public_filename}"
+    return {"file_url": file_url,
+            "previewURL": f"https://view.officeapps.live.com/op/embed.aspx?src={file_url}",
+            "googlePreviewUrl": f"https://docs.google.com/viewer?{file_url}=your_file&embedded=true"}

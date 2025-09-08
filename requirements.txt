@@ -4,3 +4,4 @@ pydantic
 python-pptx
 google-genai
 requests
+uuid
