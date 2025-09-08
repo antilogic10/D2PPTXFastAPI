@@ -8,8 +8,18 @@ import json
 import requests
 import tempfile
 from datetime import datetime
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
+
+# Allow all origins
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # <-- allows all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # <-- allows all methods (GET, POST, etc.)
+    allow_headers=["*"],  # <-- allows all headers
+)
 
 # Pydantic model for request body
 class PPTRequest(BaseModel):
