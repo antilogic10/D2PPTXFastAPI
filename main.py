@@ -209,7 +209,7 @@ def generate_ppt(req: PPTRequest):
         os.remove(pptx_path)
 
     # Step 4: Return public URL
-    file_url = f"{DOMAIN_NAME}files/{public_filename}"
+    file_url = f"{DOMAIN_NAME}{GENERATED_DIR}/{public_filename}"
     return {"file_url": file_url}
 
 @app.post("/upload-files/")
@@ -226,7 +226,7 @@ async def upload_files(files: List[UploadFile] = File(...)):
             shutil.copyfileobj(file.file, buffer)
 
         # Build file URL
-        file_url = f"{DOMAIN_NAME}files/{filename}"
+        file_url = f"{DOMAIN_NAME}{UPLOAD_DIR}/{filename}"
         saved_files.append({"filename": filename, "url": file_url})
 
     return {"uploaded": saved_files}
