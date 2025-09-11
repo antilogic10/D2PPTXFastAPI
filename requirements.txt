@@ -5,3 +5,4 @@ python-pptx
 google-genai
 requests
 uuid
+python-multipart

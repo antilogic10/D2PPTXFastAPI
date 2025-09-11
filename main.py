@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, File, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 import os
@@ -12,7 +12,13 @@ from fastapi.middleware.cors import CORSMiddleware
 import uuid
 from fastapi.staticfiles import StaticFiles
 import shutil
+from typing import List
 
+
+UPLOAD_DIR = "uploaded_files"
+GENERATED_DIR = "generated_files"
+DOMAIN_NAME = "https://d2pptxfastapi.onrender.com/" #os.getenv("DOMAIN_NAME", "http://localhost:8000/")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 app = FastAPI()
 
@@ -25,7 +31,9 @@ app.add_middleware(
     allow_headers=["*"],  # <-- allows all headers
 )
 
-app.mount("/files", StaticFiles(directory="generated_files"), name="files")
+app.mount(f"/{GENERATED_DIR}", StaticFiles(directory=GENERATED_DIR), name="files")
+# Serve uploaded files
+app.mount(f"/{UPLOAD_DIR}", StaticFiles(directory=UPLOAD_DIR), name="files")
 # Pydantic model for request body
 class PPTRequest(BaseModel):
     fileUrl: str   # Name of the pptx template file
@@ -188,7 +196,7 @@ def generate_ppt(req: PPTRequest):
     # Step 3: Generate unique filename
     unique_id = uuid.uuid4().hex[:8]  # short UUID
     public_filename = f"presentation_{unique_id}.pptx"
-    public_path = os.path.join("generated_files", public_filename)
+    public_path = os.path.join(GENERATED_DIR, public_filename)
 
     # Move to public folder
     shutil.copy(updated_pptx, public_path)
@@ -201,7 +209,24 @@ def generate_ppt(req: PPTRequest):
         os.remove(pptx_path)
 
     # Step 4: Return public URL
-    file_url = f"https://d2pptxfastapi.onrender.com/files/{public_filename}"
-    return {"file_url": file_url,
-            "previewURL": f"https://view.officeapps.live.com/op/embed.aspx?src={file_url}",
-            "googlePreviewUrl": f"https://docs.google.com/viewer?url={file_url}&embedded=true"}
+    file_url = f"{DOMAIN_NAME}files/{public_filename}"
+    return {"file_url": file_url}
+
+@app.post("/upload-files/")
+async def upload_files(files: List[UploadFile] = File(...)):
+    saved_files = []
+
+    for file in files:
+        # Always use the original filename
+        filename = file.filename
+        file_path = os.path.join(UPLOAD_DIR, filename)
+
+        # "wb" mode automatically replaces file if it already exists
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+
+        # Build file URL
+        file_url = f"{DOMAIN_NAME}files/{filename}"
+        saved_files.append({"filename": filename, "url": file_url})
+
+    return {"uploaded": saved_files}
