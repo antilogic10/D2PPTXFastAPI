@@ -240,17 +240,27 @@ def validateJson(cleaned_json, textBoxList):
         print("\n-----\nPlaceholder count mismatch:", len(cleaned_json.keys()), "vs", len(textBoxList), "\n-----\n")
         return False
 
-    # Check empty or repeated values (with exception for numeric placeholders)
+    # Validate values
+    seen_values = set()
     for k, v in cleaned_json.items():
         if not v:
             print("\n-----\nEmpty value for key:", k, "\n-----\n")
             return False
 
-        # Reject only if value is literally just the placeholder text
-        # AND it's not purely numeric (like "01")
-        if v == k and not k.isdigit():
-            print("\n-----\nRepeated placeholder text for key:", k, "\n-----\n")
+        # Skip numeric placeholders (like 01, 02…)
+        if k.isdigit():
+            continue
+
+        # Disallow "Heading 3": "Heading 3" or "Slide title": "Slide title"
+        if v == k:
+            print("\n-----\nRepeated value for key:", k, "\n-----\n")
             return False
+
+        # Optional: disallow duplicate non-numeric values
+        if v in seen_values:
+            print("\n-----\nDuplicate value detected:", v, "\n-----\n")
+            return False
+        seen_values.add(v)
 
     return True
 
