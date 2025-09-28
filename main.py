@@ -100,6 +100,12 @@ def updateTemplatePlaceholders(pptx_path: str, slide_index: int, replacements: d
                         for run in paragraph.runs:
                             if run.text.strip() == original_text:
                                 run.text = new_value
+                
+                elif isinstance(new_value, type(None)):
+                    for paragraph in shape.text_frame.paragraphs:
+                        for run in paragraph.runs:
+                            if run.text.strip() == original_text:
+                                run.text = ""
 
                 elif isinstance(new_value, list):
                     paragraphs = shape.text_frame.paragraphs
@@ -223,35 +229,54 @@ def home():
     """
 
 
+def validateJson(cleaned_json, textBoxList):
+    # Check for explicit error
+    if "error" in cleaned_json:
+        print("\n-----\nError found in JSON:", cleaned_json["error"], "\n-----\n")
+        return False
+
+    # Check placeholder mismatch
+    if len(cleaned_json.keys()) != len(textBoxList):
+        print("\n-----\nPlaceholder count mismatch:", len(cleaned_json.keys()), "vs", len(textBoxList), "\n-----\n")
+        return False
+
+    # Check empty or repeated values (with exception for numeric placeholders)
+    for k, v in cleaned_json.items():
+        if not v:
+            print("\n-----\nEmpty value for key:", k, "\n-----\n")
+            return False
+
+        # Reject only if value is literally just the placeholder text
+        # AND it's not purely numeric (like "01")
+        if v == k and not k.isdigit():
+            print("\n-----\nRepeated placeholder text for key:", k, "\n-----\n")
+            return False
+
+    return True
+
 @app.post("/generate-ppt")
 def generate_ppt(req: PPTRequest):
     # Step 1: Download template
     pptx_path = download_pptx(req.fileUrl)
+    textBoxList = list_text_boxes(pptx_path, 0)
 
     prompt = f"""You are an expert PowerPoint slide content generator.
 
-    You are given three inputs:
-    1. An image of the PowerPoint template (for layout only — DO NOT read or use any text from this image).
-    2. Unstructured user-provided content.
-    3. A JSON object describing the placeholders, where:
-       - Each key is the placeholder text.
-       - Each value describes its type: "text" or "list".
-
-    Your task:
-    - For placeholders with type "text", return a string.
-    - For placeholders with type "list", return a JSON array of strings (each string = one bullet point).
-    - ONLY use the provided content to generate text for each placeholder.
-    - If the provided content is longer than the placeholders, summarize it clearly and concisely to fit.
-    - DO NOT add or invent information not in the content.
-    - Ensure the generated text fits naturally in a PowerPoint presentation.
-    - Return ONLY a valid JSON object, mapping placeholder keys to their updated values.
-    - Do not return anything else except the JSON object.
-    - if you expect there to be a bulleted list in the content, return it as a list of strings in the JSON. List this '["point1","point2"]'
-    - Ensure the JSON is properly formatted and parsable.  
+    If you cannot produce a valid mapping for ALL placeholders, 
+    you MUST return ONLY this JSON:
+    {{"error": "Content too short for the template. Please provide more detailed content."}}
 
     Inputs:
     Content: {req.content}
-    Placeholders: {json.dumps(list_text_boxes(pptx_path, 0), indent=2)}
+    Placeholders: {json.dumps(textBoxList, indent=2)}
+
+    Given the Placeholders and the image as the context for the slide, I have provided some unstructured content. Your task is to generate a json object with keys as the exact placeholder text and values as the content to fill in those placeholders.
+    Guidelines:
+    1. Ensure that the content you generate is relevant to the provided content. It should not have any hallucinated or made-up information.Or any information from the image template it is only for reference.
+    2. If placeholders with type "list", return a JSON array of strings (each string = one bullet point). If it's plain text, provide a string.
+    3. If you cannot find suitable content for a placeholder stop all execution and return {{"error": "Content too short for the template. Please provide more detailed content."}}
+    4. Ensure the JSON is properly formatted as the placeholder provided.
+    5. Do not include any explanations or additional text outside the JSON. 
     """
 
     uploadedFile = client.files.upload(file=download_image(req.imageUrl))
@@ -260,29 +285,32 @@ def generate_ppt(req: PPTRequest):
         contents=[prompt,uploadedFile]
     )
     cleanedJson = json.loads((response.text.strip("`")).replace("json","",1).strip())
-    # print("\n",req.content,"\n")
-    print("Generated JSON:", cleanedJson)
-    # Step 2: Replace placeholders
-    updated_pptx =updateTemplatePlaceholders(pptx_path, 0, cleanedJson)
+    print("\n------\nGenerated JSON:", cleanedJson,"\n------\n")
+    if not validateJson(cleanedJson, textBoxList):
+        if os.path.exists(pptx_path):
+            os.remove(pptx_path)
+        return {"error": "Error Generating PPTX, Content too short for the template. Please provide more detailed content."}
+    else:
+        updated_pptx =updateTemplatePlaceholders(pptx_path, 0, cleanedJson)
 
-    # Step 3: Generate unique filename
-    unique_id = uuid.uuid4().hex[:8]  # short UUID
-    public_filename = f"presentation_{unique_id}.pptx"
-    public_path = os.path.join(GENERATED_DIR, public_filename)
+        # Step 3: Generate unique filename
+        unique_id = uuid.uuid4().hex[:8]  # short UUID
+        public_filename = f"presentation_{unique_id}.pptx"
+        public_path = os.path.join(GENERATED_DIR, public_filename)
 
-    # Move to public folder
-    shutil.copy(updated_pptx, public_path)
+        # Move to public folder
+        shutil.copy(updated_pptx, public_path)
 
-    # Delete the temporary file
-    if os.path.exists(updated_pptx):
-        os.remove(updated_pptx)
+        # Delete the temporary file
+        if os.path.exists(updated_pptx):
+            os.remove(updated_pptx)
 
-    if os.path.exists(pptx_path):
-        os.remove(pptx_path)
+        if os.path.exists(pptx_path):
+            os.remove(pptx_path)
 
-    # Step 4: Return public URL
-    file_url = f"{DOMAIN_NAME}{GENERATED_DIR}/{public_filename}"
-    return {"file_url": file_url}
+        # Step 4: Return public URL
+        file_url = f"{DOMAIN_NAME}{GENERATED_DIR}/{public_filename}"
+        return {"file_url": file_url}
 
 @app.post("/upload-files/")
 async def upload_files(files: List[UploadFile] = File(...)):
