@@ -39,7 +39,7 @@ class PPTRequest(BaseModel):
     fileUrl: str   # Name of the pptx template file
     content: str  # Unstructured content to be filled in the pptx
     imageUrl: str   # image url uploaded to gemini for context
-
+    rewriteWithAi: bool = False  # Whether to rewrite content with AI
 # Initialize Gemini client
 client = genai.Client(api_key=os.getenv("GEMINI_API"))
 
@@ -292,15 +292,21 @@ def validateJson(cleaned_json, textBoxList):
             continue
 
         # Disallow "Heading 3": "Heading 3" or "Slide title": "Slide title"
-        if v == k:
+        if isinstance(v, str) and v.strip().lower() == k.strip().lower():
             print("\n-----\nRepeated value for key:", k, "\n-----\n")
             return False
 
+        # Handle unhashable types safely
+        if isinstance(v, (dict, list)):
+            v_hash = json.dumps(v, sort_keys=True)  # Convert to string for hashing
+        else:
+            v_hash = str(v).strip()
+
         # Optional: disallow duplicate non-numeric values
-        if v in seen_values:
+        if v_hash in seen_values:
             print("\n-----\nDuplicate value detected:", v, "\n-----\n")
             return False
-        seen_values.add(v)
+        seen_values.add(v_hash)
 
     return True
 
@@ -310,32 +316,54 @@ def generate_ppt(req: PPTRequest):
     pptx_path = download_pptx(req.fileUrl)
     textBoxList = list_text_boxes(pptx_path, 0)
 
-    prompt = f"""You are an expert PowerPoint slide content generator.
+    prompt = f"""" """
+    
+    if(req.rewriteWithAi):
+        prompt = f"""You are an expert PowerPoint slide content generator. Your task is to first rewrite the provided content to make it more suitable for a professional PowerPoint presentation, and then map that rewritten content to the given placeholders.
 
-    If you cannot produce a valid mapping for ALL placeholders, 
-    you MUST return ONLY this JSON:
-    {{"error": "Content too short for the template. Please provide more detailed content."}}
+        If you cannot produce a valid mapping for ALL placeholders, 
+        you MUST return ONLY this JSON:
+        {{"error": "Content too short for the template. Please provide more detailed content."}}
 
-    Inputs:
-    Content: {req.content}
-    Placeholders: {json.dumps(textBoxList, indent=2)}
+        Inputs:
+        Content: {req.content}
+        Placeholders: {json.dumps(textBoxList, indent=2)}
 
-    Given the Placeholders and the image as the context for the slide, I have provided some unstructured content. Your task is to generate a json object with keys as the exact placeholder text and values as the content to fill in those placeholders.
-    Guidelines:
-    1. Ensure that the content you generate is relevant to the provided content. It should not have any hallucinated or made-up information.Or any information from the image template it is only for reference.
-    2. If placeholders with type "list", return a JSON array of strings (each string = one bullet point). If it's plain text, provide a string.
-    3. If you cannot find suitable content for a placeholder stop all execution and return {{"error": "Content too short for the template. Please provide more detailed content."}}
-    4. Ensure the JSON is properly formatted as the placeholder provided.
-    5. Do not include any explanations or additional text outside the JSON. 
-    """
+        Given the Placeholders and the image as the context for the slide, I have provided some unstructured content. Your task is to generate a json object with keys as the exact placeholder text and values as the rewritten content to fill in those placeholders.
+        Guidelines:
+        1. Ensure that the content you generate is relevant to the provided content. It should not have any factual errors.Or any information from the image template it is only for reference.
+        2. If placeholders with type "list", return a JSON array of strings (each string = one bullet point). If it's plain text, provide a string.
+        3. If you cannot find suitable content for a placeholder stop all execution and return {{"error": "Content too short for the template. Please provide more detailed content."}}
+        4. Ensure the JSON is properly formatted as the placeholder provided.
+        5. Do not include any explanations or additional text outside the JSON. 
+        """
+    else:
+        prompt = f"""You are an expert PowerPoint slide content generator. Do not rewrite the provided content, just map it to the given placeholders.
 
+        If you cannot produce a valid mapping for ALL placeholders, 
+        you MUST return ONLY this JSON:
+        {{"error": "Content too short for the template. Please provide more detailed content."}}
+
+        Inputs:
+        Content: {req.content}
+        Placeholders: {json.dumps(textBoxList, indent=2)}
+
+        Given the Placeholders and the image as the context for the slide, I have provided some unstructured content. Your task is to generate a json object with keys as the exact placeholder text and values as the content to fill in those placeholders.
+        Guidelines:
+        1. Ensure that the content you generate is relevant to the provided content. It should not have any hallucinated or made-up information.Or any information from the image template it is only for reference.
+        2. If placeholders with type "list", return a JSON array of strings (each string = one bullet point). If it's plain text, provide a string.
+        3. If you cannot find suitable content for a placeholder stop all execution and return {{"error": "Content too short for the template. Please provide more detailed content."}}
+        4. Ensure the JSON is properly formatted as the placeholder provided.
+        5. Do not include any explanations or additional text outside the JSON. 
+        """
+   
     uploadedFile = client.files.upload(file=download_image(req.imageUrl))
     response = client.models.generate_content(
         model="gemini-2.0-flash",
         contents=[prompt,uploadedFile]
     )
     cleanedJson = json.loads((response.text.strip("`")).replace("json","",1).strip())
-    print("\n------\nGenerated JSON:", cleanedJson,"\n------\n")
+    print("\n----- Prompted ----",prompt,"\n---end prompt---","\n------\nGenerated JSON:", cleanedJson,"\n------\n")
     if not validateJson(cleanedJson, textBoxList):
         if os.path.exists(pptx_path):
             os.remove(pptx_path)
