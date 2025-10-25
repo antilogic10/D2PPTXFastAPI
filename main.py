@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException, File, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 import os
 from pptx import Presentation
@@ -17,7 +17,7 @@ from typing import List
 
 UPLOAD_DIR = "uploaded_files"
 GENERATED_DIR = "generated_files"
-DOMAIN_NAME = "https://d2pptxfastapi.onrender.com/" #os.getenv("DOMAIN_NAME", "http://localhost:8000/")
+DOMAIN_NAME = os.getenv("DOMAIN_NAME", "http://localhost:8000")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 app = FastAPI()
@@ -173,6 +173,15 @@ STARTED_AT = datetime.utcnow()
 @app.get("/",response_class=HTMLResponse)
 def home():
     uptime = datetime.utcnow() - STARTED_AT
+    
+    # 🧮 Get Disk Usage
+    total, used, free = shutil.disk_usage("/")
+    used_gb = used / (2**30)
+    total_gb = total / (2**30)
+    free_gb = free / (2**30)
+    percent_used = (used / total) * 100
+
+    # 🧱 Return HTML
     return f"""
     <!doctype html>
     <html lang="en">
@@ -196,6 +205,7 @@ def home():
                 border-radius: 1rem;
                 text-align: center;
                 box-shadow: 0 10px 20px rgba(0,0,0,0.5);
+                width: 400px;
             }}
             h1 {{
                 margin: 0 0 0.5rem;
@@ -212,6 +222,25 @@ def home():
                 text-decoration: none;
             }}
             a:hover {{ text-decoration: underline; }}
+            .progress {{
+                background: #334155;
+                border-radius: 10px;
+                overflow: hidden;
+                height: 16px;
+                width: 100%;
+                margin: 10px 0;
+                box-shadow: inset 0 1px 3px rgba(0,0,0,0.3);
+            }}
+            .progress-bar {{
+                height: 100%;
+                background: linear-gradient(90deg, #38bdf8, #0ea5e9);
+                width: {percent_used:.2f}%;
+                transition: width 0.5s ease-in-out;
+            }}
+            .disk-info {{
+                font-size: 0.85rem;
+                color: #a1a1aa;
+            }}
         </style>
     </head>
     <body>
@@ -219,7 +248,19 @@ def home():
             <h1>🚀 {app.title} is Live</h1>
             <p>All APIs are up and working correctly.</p>
             <p class="uptime">Uptime: {uptime}</p>
-            <p>
+
+            <div style="margin-top:1rem;">
+                <p>💾 Disk Usage</p>
+                <div class="progress">
+                    <div class="progress-bar"></div>
+                </div>
+                <p class="disk-info">
+                    Used: {used_gb:.2f} GB / {total_gb:.2f} GB<br/>
+                    Free: {free_gb:.2f} GB ({100 - percent_used:.2f}%)
+                </p>
+            </div>
+
+            <p style="margin-top:1rem;">
                 <a href="/docs">Interactive Docs</a> • 
                 <a href="/redoc">ReDoc</a>
             </p>
@@ -227,7 +268,6 @@ def home():
     </body>
     </html>
     """
-
 
 def validateJson(cleaned_json, textBoxList):
     # Check for explicit error
