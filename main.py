@@ -19,6 +19,7 @@ UPLOAD_DIR = "uploaded_files"
 GENERATED_DIR = "generated_files"
 DOMAIN_NAME = os.getenv("DOMAIN_NAME", "http://localhost:8000")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.umask(0o022)
 
 app = FastAPI()
 
@@ -438,7 +439,8 @@ def generate_ppt(req: PPTRequest):
 
         # Move to public folder
         shutil.copy(updated_pptx, public_path)
-
+        # make the file publicly readable
+        os.chmod(public_path, 0o755)
         # Delete the temporary file
         if os.path.exists(updated_pptx):
             os.remove(updated_pptx)
@@ -462,6 +464,9 @@ async def upload_files(files: List[UploadFile] = File(...)):
         # "wb" mode automatically replaces file if it already exists
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
+
+        # Make the file publicly readable
+        os.chmod(file_path, 0o755)
 
         # Build file URL
         file_url = f"{DOMAIN_NAME}{UPLOAD_DIR}/{filename}"
