@@ -316,47 +316,107 @@ def generate_ppt(req: PPTRequest):
     pptx_path = download_pptx(req.fileUrl)
     textBoxList = list_text_boxes(pptx_path, 0)
 
-    prompt = f"""" """
+    prompt = f""" """
     
     if(req.rewriteWithAi):
-        prompt = f"""You are an expert PowerPoint slide content generator. Your task is to first rewrite the provided content to make it more suitable for a professional PowerPoint presentation, and then map that rewritten content to the given placeholders.
+        prompt = f"""You are an expert PowerPoint content writer and designer.
 
-        If you cannot produce a valid mapping for ALL placeholders, 
-        you MUST return ONLY this JSON:
+        Your task is to:
+        1. Rewrite and enhance the provided content so it is polished, professional, and suitable for business presentations.
+        2. Map the rewritten content accurately to the given placeholders.
+        3. Ensure the rewritten text fits **visually and contextually** within the layout bounds of each placeholder based on the provided slide image.
+
+        If you cannot produce a valid mapping for every placeholder,
+        return only this JSON:
         {{"error": "Content too short for the template. Please provide more detailed content."}}
 
-        Inputs:
-        Content: {req.content}
-        Placeholders: {json.dumps(textBoxList, indent=2)}
+        ---
 
-        Given the Placeholders and the image as the context for the slide, I have provided some unstructured content. Your task is to generate a json object with keys as the exact placeholder text and values as the rewritten content to fill in those placeholders.
-        Guidelines:
-        1. Ensure that the content you generate is relevant to the provided content. It should not have any factual errors.Or any information from the image template it is only for reference.
-        2. If placeholders with type "list", return a JSON array of strings (each string = one bullet point). If it's plain text, provide a string.
-        3. If you cannot find suitable content for a placeholder stop all execution and return {{"error": "Content too short for the template. Please provide more detailed content."}}
-        4. Ensure the JSON is properly formatted as the placeholder provided.
-        5. Do not include any explanations or additional text outside the JSON. 
+        ### Inputs
+        - Content: {req.content}
+        - Placeholders: {json.dumps(textBoxList, indent=2)}
+        - Slide Layout Image: The image visually represents the slide’s structure and placeholder spacing. Use it only to gauge **content density and balance**, not design elements or colors.
+
+        ---
+
+        ### Core Guidelines
+
+        1. **Rewriting Rules**
+           - Rewrite the content in a professional, concise, and presentation-friendly tone.
+           - Preserve the **original meaning and factual accuracy**.
+           - You **may** lightly expand or enrich the content with factual, contextually relevant insights **only** if:
+             - There is sufficient visual space in the corresponding placeholder, and
+             - The addition improves slide clarity or flow.
+           - Avoid verbosity — aim for **balanced, slide-fitting text**.
+           - Do **not** add new unrelated facts, data, or visuals.
+
+        2. **Layout Awareness**
+           - Infer approximate text limits per placeholder by analyzing the slide layout.
+           - Prefer short sentences, bullet points, and crisp phrasing.
+           - Titles and headings should be brief (ideally ≤ 6 words).
+           - Lists should have 3–5 concise bullets at most.
+           - Body text should not overflow beyond visible box limits.
+
+        3. **Mapping Logic**
+           - Assign each rewritten content segment to the placeholder that best fits its intent (title, subtitle, list, etc.).
+           - For placeholders marked `"list"`, output an array of bullet strings.
+           - For `"text"` placeholders, output a single concise string.
+           - Ensure every placeholder is meaningfully filled without redundancy.
+
+        4. **Validation**
+           - If the content is clearly too short to fill all placeholders,
+             return:
+             {{"error": "Content too short for the template. Please provide more detailed content."}}
+           - Never include partial mappings, commentary, markdown, or any non-JSON text.
+
+        ---
+
+        ### Output Format
+        - Return **one valid JSON object only**.
+        - Keys = exact placeholder text.
+        - Values = strings or string arrays according to type.
+        - Output must be **valid, compact JSON**, properly closed, and free of any extra formatting.
         """
     else:
-        prompt = f"""You are an expert PowerPoint slide content generator. Do not rewrite the provided content, just map it to the given placeholders.
+        prompt = f"""You are an expert PowerPoint content generator. 
+        Your task is to map the provided content to the given placeholders so it fits naturally within the slide layout.
 
-        If you cannot produce a valid mapping for ALL placeholders, 
-        you MUST return ONLY this JSON:
+        If you cannot produce a valid mapping for every placeholder,
+        return only this JSON:
         {{"error": "Content too short for the template. Please provide more detailed content."}}
 
-        Inputs:
-        Content: {req.content}
-        Placeholders: {json.dumps(textBoxList, indent=2)}
+        ### Inputs
+        - Content: {req.content}
+        - Placeholders: {json.dumps(textBoxList, indent=2)}
 
-        Given the Placeholders and the image as the context for the slide, I have provided some unstructured content. Your task is to generate a json object with keys as the exact placeholder text and values as the content to fill in those placeholders.
-        Guidelines:
-        1. Ensure that the content you generate is relevant to the provided content. It should not have any hallucinated or made-up information.Or any information from the image template it is only for reference.
-        2. If placeholders with type "list", return a JSON array of strings (each string = one bullet point). If it's plain text, provide a string.
-        3. If you cannot find suitable content for a placeholder stop all execution and return {{"error": "Content too short for the template. Please provide more detailed content."}}
-        4. Ensure the JSON is properly formatted as the placeholder provided.
-        5. Do not include any explanations or additional text outside the JSON. 
+        ### Core Rules
+        1. **Never fabricate, hallucinate, or invent** any information.
+        2. Use the content **exactly as provided** — no paraphrasing, shortening, or expansion.
+           (This prompt assumes the content should be used as-is.)
+        3. The slide image is only a visual reference. Do **not** use its design, text, or colors for content inference.
+
+        ### Mapping Logic
+        1. Analyze the placeholders and identify their roles (e.g., title, heading, subheading, body text, list, etc.).
+        2. Identify logical segments in the content — such as paragraphs, newlines, punctuation, colons, dashes, or bullet-like structures.
+        3. Map each segment to the placeholder that best fits it:
+           - Match titles or overarching themes to placeholders like “Slide Title” or “Title”.
+           - Match short phrases or step names to placeholders like “Heading 1”, “Heading 2”, etc.
+           - Match longer text or multiple points to “list” placeholders.
+        4. If a placeholder’s type is `"list"`, return a JSON array of strings (each string = one bullet point).
+           If a placeholder’s type is `"text"`, return a single string.
+        5. Use all provided content meaningfully and distribute it logically across placeholders.
+        6. If the content clearly does not contain enough distinct segments to fill all placeholders,
+           return only:
+           {{"error": "Content too short for the template. Please provide more detailed content."}}
+
+        ### Output Requirements
+        - Return a **single valid JSON object**.
+        - Keys = exact placeholder text from the provided list.
+        - Values = strings or string arrays as per placeholder type.
+        - Do not include explanations, notes, or markdown formatting.
+        - The response must be **strictly valid JSON** with no extra text before or after it.
         """
-   
+
     uploadedFile = client.files.upload(file=download_image(req.imageUrl))
     response = client.models.generate_content(
         model="gemini-2.0-flash",
