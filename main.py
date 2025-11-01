@@ -322,102 +322,75 @@ def generate_ppt(req: PPTRequest):
     prompt = f""" """
     
     if(req.rewriteWithAi):
-        prompt = f"""You are an expert PowerPoint content writer and designer.
-
-        Your task is to:
-        1. Rewrite and enhance the provided content so it is polished, professional, and suitable for business presentations.
-        2. Map the rewritten content accurately to the given placeholders.
-        3. Ensure the rewritten text fits **visually and contextually** within the layout bounds of each placeholder based on the provided slide image.
-
+        prompt = f"""
+        You are an expert PowerPoint slide content writer and layout-aware editor. 
+        Your task is to enhance and professionally rewrite the given content so it fits clearly and neatly into the provided PowerPoint placeholders, 
+        keeping the slide visually balanced and non-repetitive.
+        
         If you cannot produce a valid mapping for every placeholder,
         return only this JSON:
         {{"error": "Content too short for the template. Please provide more detailed content."}}
-
-        ---
-
+        
         ### Inputs
         - Content: {req.content}
         - Placeholders: {json.dumps(textBoxList, indent=2)}
-        - Slide Layout Image: The image visually represents the slide’s structure and placeholder spacing. Use it only to gauge **content density and balance**, not design elements or colors.
+        
+        ### Objectives
+        1. Rewrite the provided content in a concise, business-professional tone.
+        2. You may **add small, relevant details or context** only if it helps clarify or complete ideas, but never invent unrelated or misleading information.
+        3. Do not copy identical text across multiple placeholders unless it is genuinely meant to repeat (e.g., a shared title).
+        4. Keep wording compact enough so text fits inside each placeholder box — imagine a standard PowerPoint layout where 4–6 bullet points per box is ideal.
+        5. The template image is **only for reference** to understand approximate space and structure. Do not infer color, shape, or visual design from it.
+        
+        ### Mapping Logic
+        1. Determine the purpose of each placeholder (e.g., title, subtitle, step, description, list).
+        2. Split and map the rewritten content logically:
+           - Assign distinct yet contextually linked text to each placeholder.
+           - For sequential steps (e.g., “Discover”, “Plan”, “Create”, “Deliver”), ensure each step has its own unique focus and description.
+        3. If placeholder type is "list", return an array of bullet points (minimum 1 and maximum as per the template image provided). When creating bullet lists, use clean text without adding any extra symbols such as hyphens (-), asterisks (*), or other bullet markers — return plain text items only. If placeholder type is "text", return a single concise string.
 
-        ---
-
-        ### Core Guidelines
-
-        1. **Rewriting Rules**
-           - Rewrite the content in a professional, concise, and presentation-friendly tone.
-           - Preserve the **original meaning and factual accuracy**.
-           - You **may** lightly expand or enrich the content with factual, contextually relevant insights **only** if:
-             - There is sufficient visual space in the corresponding placeholder, and
-             - The addition improves slide clarity or flow.
-           - Avoid verbosity — aim for **balanced, slide-fitting text**.
-           - Do **not** add new unrelated facts, data, or visuals.
-
-        2. **Layout Awareness**
-           - Infer approximate text limits per placeholder by analyzing the slide layout.
-           - Prefer short sentences, bullet points, and crisp phrasing.
-           - Titles and headings should be brief (ideally ≤ 6 words).
-           - Lists should have 3–5 concise bullets at most.
-           - Body text should not overflow beyond visible box limits.
-
-        3. **Mapping Logic**
-           - Assign each rewritten content segment to the placeholder that best fits its intent (title, subtitle, list, etc.).
-           - For placeholders marked `"list"`, output an array of bullet strings.
-           - For `"text"` placeholders, output a single concise string.
-           - Ensure every placeholder is meaningfully filled without redundancy.
-
-        4. **Validation**
-           - If the content is clearly too short to fill all placeholders,
-             return:
-             {{"error": "Content too short for the template. Please provide more detailed content."}}
-           - Never include partial mappings, commentary, markdown, or any non-JSON text.
-
-        ---
-
-        ### Output Format
-        - Return **one valid JSON object only**.
-        - Keys = exact placeholder text.
-        - Values = strings or string arrays according to type.
-        - Output must be **valid, compact JSON**, properly closed, and free of any extra formatting.
+        4. If any placeholder cannot be filled meaningfully, stop and return:
+           {{"error": "Content too short for the template. Please provide more detailed content."}}
+        
+        ### Output Requirements
+        - Return **only a valid JSON object**.
+        - Keys = exact placeholder text from the provided list.
+        - Values = strings or string arrays depending on placeholder type.
+        - No explanations, markdown, or extra commentary.
+        - Ensure the JSON is syntactically valid.
         """
     else:
-        prompt = f"""You are an expert PowerPoint content generator. 
-        Your task is to map the provided content to the given placeholders so it fits naturally within the slide layout.
-
-        If you cannot produce a valid mapping for every placeholder,
+        prompt = f"""You are a highly precise PowerPoint content mapper. 
+        Your task is to map the provided content directly to the given placeholders **exactly as written**, without rewriting or rephrasing it — 
+        but with logical splitting and proper assignment based on context.
+        
+        If you cannot produce a valid mapping for every placeholder, 
         return only this JSON:
         {{"error": "Content too short for the template. Please provide more detailed content."}}
-
+        
         ### Inputs
         - Content: {req.content}
         - Placeholders: {json.dumps(textBoxList, indent=2)}
-
-        ### Core Rules
-        1. **Never fabricate, hallucinate, or invent** any information.
-        2. Use the content **exactly as provided** — no paraphrasing, shortening, or expansion.
-           (This prompt assumes the content should be used as-is.)
-        3. The slide image is only a visual reference. Do **not** use its design, text, or colors for content inference.
-
-        ### Mapping Logic
-        1. Analyze the placeholders and identify their roles (e.g., title, heading, subheading, body text, list, etc.).
-        2. Identify logical segments in the content — such as paragraphs, newlines, punctuation, colons, dashes, or bullet-like structures.
-        3. Map each segment to the placeholder that best fits it:
-           - Match titles or overarching themes to placeholders like “Slide Title” or “Title”.
-           - Match short phrases or step names to placeholders like “Heading 1”, “Heading 2”, etc.
-           - Match longer text or multiple points to “list” placeholders.
-        4. If a placeholder’s type is `"list"`, return a JSON array of strings (each string = one bullet point).
-           If a placeholder’s type is `"text"`, return a single string.
-        5. Use all provided content meaningfully and distribute it logically across placeholders.
-        6. If the content clearly does not contain enough distinct segments to fill all placeholders,
-           return only:
+        
+        ### Mapping Rules
+        1. **Do not rewrite or rephrase** the text; only split or assign it logically.
+        2. Identify the intent of each placeholder (e.g., “Discover”, “Plan”, “Create”, “Deliver”).
+        3. Group related sentences, phrases, or bullet points from the content and assign them to the most contextually relevant placeholder.
+           - Example: All lines mentioning “research”, “analysis”, or “identifying needs” → map to “Discover”.
+           - Lines about “strategy”, “planning”, “goal setting” → map to “Plan”.
+           - Lines about “design”, “development”, “execution” → map to “Create”.
+           - Lines about “testing”, “delivery”, “measurement”, “results” → map to “Deliver”.
+        4. If placeholder type is "list", return an array of bullet points (minimum 1 and maximum as per the template image provided). When creating bullet lists, use clean text without adding any extra symbols such as hyphens (-), asterisks (*), or other bullet markers — return plain text items only. If placeholder type is "text", return a single concise string.
+        5. **Never duplicate the same sentences** across placeholders unless the content itself repeats them exactly.
+        6. Maintain the factual meaning and original order of ideas wherever possible.
+        7. If any placeholder cannot be filled with meaningful data, stop and return:
            {{"error": "Content too short for the template. Please provide more detailed content."}}
-
-        ### Output Requirements
-        - Return a **single valid JSON object**.
+        8. If the provided content clearly and meaningfully fills only a subset of placeholders (for example, a title and four main sections), this is acceptable. Do not force-fill empty placeholders with guesses or duplicated text. Only leave placeholders empty if no relevant content exists for them.
+        ### Output Format
+        - Output **strictly valid JSON only**.
         - Keys = exact placeholder text from the provided list.
-        - Values = strings or string arrays as per placeholder type.
-        - Do not include explanations, notes, or markdown formatting.
-        - The response must be **strictly valid JSON** with no extra text before or after it.
+        - Values = strings or string arrays depending on placeholder type.
+        - No markdown, no explanations, no extra commentary.
         """
 
     uploadedFile = client.files.upload(file=download_image(req.imageUrl))
