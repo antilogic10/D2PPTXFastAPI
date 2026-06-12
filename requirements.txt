@@ -6,3 +6,4 @@ google-genai
 requests
 uuid
 python-multipart
+pinecone

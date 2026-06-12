@@ -3,7 +3,6 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 import os
 from pptx import Presentation
-from google import genai
 import json
 import requests
 import tempfile
@@ -13,15 +12,29 @@ import uuid
 from fastapi.staticfiles import StaticFiles
 import shutil
 from typing import List
+from pinecone import Pinecone
+from pptx.enum.shapes import MSO_SHAPE_TYPE
+from pathlib import Path
+from copy import deepcopy
+from io import BytesIO
+from openai import OpenAI
+from dotenv import load_dotenv
 
+load_dotenv()
 
 UPLOAD_DIR = "uploaded_files"
 GENERATED_DIR = "generated_files"
 DOMAIN_NAME = os.getenv("DOMAIN_NAME", "http://localhost:8000")
+INDEX_NAME = "icons-store"
+ICONS_NAMESPACE = "icons-namespace"
+BATCH_SIZE = 50
+BASE_DIR = Path(__file__).resolve().parent
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.umask(0o022)
 
-app = FastAPI()
+app = FastAPI(root_path="/api")
+pc = Pinecone(api_key=os.getenv("PINECONE_KEY", "pcsk_5dAecR_ThUqqVrC9cYhb3YbJXjVz8sDp1zjraPPhrGQ1j1Y3L3BzCrPmgCFLKPbmnjpXnR"))
+dense_index = pc.Index(INDEX_NAME)
 
 # Allow all origins
 app.add_middleware(
@@ -41,11 +54,41 @@ class PPTRequest(BaseModel):
     content: str  # Unstructured content to be filled in the pptx
     imageUrl: str   # image url uploaded to gemini for context
     rewriteWithAi: bool = False  # Whether to rewrite content with AI
-# Initialize Gemini client
-client = genai.Client(api_key=os.getenv("GEMINI_API"))
 
-def list_text_boxes(pptx_path: str, slide_index: int):
-    prs = Presentation(pptx_path)
+class ConsolidateSlidesRequest(BaseModel):
+    ppt_paths: List[str]
+
+# Initialize OPENAI client
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+def copy_slide(source_slide, target_prs):
+    blank_layout = target_prs.slide_layouts[6]
+    target_slide = target_prs.slides.add_slide(blank_layout)
+
+    for shape in source_slide.shapes:
+
+        # ---- IMAGES ----
+        if shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
+            image_stream = BytesIO(shape.image.blob)
+
+            target_slide.shapes.add_picture(
+                image_stream,
+                shape.left,
+                shape.top,
+                shape.width,
+                shape.height
+            )
+
+        # ---- TEXT / AUTOSHAPES / EVERYTHING ELSE ----
+        else:
+            new_el = deepcopy(shape.element)
+            target_slide.shapes._spTree.insert_element_before(
+                new_el, 'p:extLst'
+            )
+
+
+def list_text_boxes(pptx_path, slide_index: int):
+    prs = pptx_path #Presentation(pptx_path)
     slide = prs.slides[slide_index]
     placeholders = {}
 
@@ -66,8 +109,8 @@ def list_text_boxes(pptx_path: str, slide_index: int):
     return placeholders
 
 
-def updateTemplatePlaceholders(pptx_path: str, slide_index: int, replacements: dict):
-    prs = Presentation(pptx_path)
+def updateTemplatePlaceholders(pptx_path, slide_index: int, replacements: dict):
+    prs = pptx_path #Presentation(pptx_path)
     slide = prs.slides[slide_index]
 
     for shape_idx, shape in enumerate(slide.shapes):
@@ -158,18 +201,101 @@ def download_pptx(url: str) -> str:
     return tmp_file.name
 
 def download_image(url: str) -> str:
-    # """Download image from the given URL and save locally"""
+    """
+    Downloads an image and converts it into a base64 data URL
+    usable directly with OpenAI Vision APIs.
+    """
+
+    import requests
+    import base64
+    from fastapi import HTTPException
+
     response = requests.get(url)
-    ext=url.split('.')[-1] if '.' in url else ''
 
     if response.status_code != 200:
-        raise HTTPException(status_code=400, detail="Could not download image file")
-    
-    tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}")
-    tmp_file.write(response.content)
-    tmp_file.close()
-    os.chmod(tmp_file.name, 0o755)
-    return tmp_file.name
+        raise HTTPException(
+            status_code=400,
+            detail="Could not download image file"
+        )
+
+    # Detect content type
+    content_type = response.headers.get("Content-Type", "image/png")
+
+    # Convert image bytes to base64
+    base64_image = base64.b64encode(response.content).decode("utf-8")
+
+    # Build OpenAI-compatible data URL
+    return f"data:{content_type};base64,{base64_image}"
+
+def get_icon(query: str):
+    return dense_index.search(
+        namespace=ICONS_NAMESPACE,
+        query={
+            "top_k": 2,
+            "inputs": {
+                'text': query
+            }
+        }
+    )
+
+def icons_identifier(ppt_path, slide_index: int):
+    prs = ppt_path #Presentation(ppt_path)
+    slide = prs.slides[slide_index]
+
+    saved_files = []
+
+    for idx, shape in enumerate(slide.shapes):
+        if shape.shape_type != MSO_SHAPE_TYPE.PICTURE:
+            continue
+        # if shape.width == shape.height:
+        #     continue
+        image = shape.image
+        image_ext = image.ext  # 'png', 'jpeg', etc.
+
+
+        file_name = f"{shape.name or f'image_{idx}'}.{image_ext}"
+        saved_files.append({
+            "file_name": file_name, 
+            "shape": shape
+            })
+
+
+    return saved_files
+
+def replace_icons(slide, slide_index, old_shape, new_image_path):
+    """
+    Replaces a picture shape with a new image,
+    preserving position, size, and rotation.
+    """
+    prs = slide #Presentation(slide)
+    slide = prs.slides[slide_index]
+
+    # Capture geometry
+    left = old_shape.left
+    top = old_shape.top
+    width = old_shape.width
+    height = old_shape.height
+    rotation = old_shape.rotation
+    print("replacing Icon", old_shape.name,)
+    print("item Icon", new_image_path,)
+    # Remove old shape
+    slide.shapes._spTree.remove(old_shape._element)
+    imgreplacer = BASE_DIR / "png_icons" / new_image_path
+    print("item Icon", imgreplacer,)
+    # Add new image
+    new_shape = slide.shapes.add_picture(
+        str(imgreplacer),
+        left,
+        top,
+        width=width,
+        height=height
+    )
+
+    # Restore rotation
+    new_shape.rotation = rotation
+
+    return new_shape
+
 
 STARTED_AT = datetime.utcnow()
 
@@ -317,7 +443,9 @@ def validateJson(cleaned_json, textBoxList):
 def generate_ppt(req: PPTRequest):
     # Step 1: Download template
     pptx_path = download_pptx(req.fileUrl)
-    textBoxList = list_text_boxes(pptx_path, 0)
+    pptx_reference = Presentation(pptx_path)
+    textBoxList = list_text_boxes(pptx_reference, 0)
+    iconsCount = icons_identifier(pptx_reference, 0)
 
     prompt = f""" """
     
@@ -325,7 +453,8 @@ def generate_ppt(req: PPTRequest):
         prompt = f"""
         You are an expert PowerPoint slide content writer and layout-aware editor. 
         Your task is to enhance and professionally rewrite the given content so it fits clearly and neatly into the provided PowerPoint placeholders, 
-        keeping the slide visually balanced and non-repetitive.
+        keeping the slide visually balanced and non-repetitive. Don't over flow the given content by more that 5-10 words,
+        keep the word count almost similar to the existing one.
         
         If you cannot produce a valid mapping for every placeholder,
         return only this JSON:
@@ -341,7 +470,12 @@ def generate_ppt(req: PPTRequest):
         3. Do not copy identical text across multiple placeholders unless it is genuinely meant to repeat (e.g., a shared title).
         4. Keep wording compact enough so text fits inside each placeholder box — imagine a standard PowerPoint layout where 4–6 bullet points per box is ideal.
         5. The template image is **only for reference** to understand approximate space and structure. Do not infer color, shape, or visual design from it.
-        
+        6. if iconCount->({len(iconsCount)}) is greater than 0 then for each section you generate content for also generate icon intents for each icon on the slide as per the following:
+        7. There are {len(iconsCount)} icons on the slide; do not reference or describe them in the text. in the json at the end just give a key called iconIntents with a list of {len(iconsCount)} strings describing the intended meaning or concept for each icon in order for each section determining it by the heading and content you generated.
+        8. if iconCount->({len(iconsCount)}) is 0 then do not add iconIntents key in the final json.
+        9. if iconCount->({len(iconsCount)}) is greater than 0 then give an array of {len(iconsCount)} strings for iconIntents in a json key <iconIntents> and the rest of the content in json key <replacementContent>.
+        10. if iconCount->({len(iconsCount)}) is 0 then give only the content in json key <replacementContent>.
+
         ### Mapping Logic
         1. Determine the purpose of each placeholder (e.g., title, subtitle, step, description, list).
         2. Split and map the rewritten content logically:
@@ -354,6 +488,8 @@ def generate_ppt(req: PPTRequest):
         
         ### Output Requirements
         - Return **only a valid JSON object**.
+        - <replacementContent> key contains the mapping of placeholders to rewritten text.
+        - <iconIntents> key (if applicable) contains an array of icon intent strings.
         - Keys = exact placeholder text from the provided list.
         - Values = strings or string arrays depending on placeholder type.
         - No explanations, markdown, or extra commentary.
@@ -386,26 +522,63 @@ def generate_ppt(req: PPTRequest):
         7. If any placeholder cannot be filled with meaningful data, stop and return:
            {{"error": "Content too short for the template. Please provide more detailed content."}}
         8. If the provided content clearly and meaningfully fills only a subset of placeholders (for example, a title and four main sections), this is acceptable. Do not force-fill empty placeholders with guesses or duplicated text. Only leave placeholders empty if no relevant content exists for them.
+        9. if iconCount->({len(iconsCount)}) is greater than 0 then for each section you generate content for also generate icon intents for each icon on the slide as per the following:
+        10. There are {len(iconsCount)} icons on the slide; do not reference or describe them in the text. in the json at the end just give a key called iconIntents with a list of {len(iconsCount)} strings describing the intended meaning or concept for each icon in order for each section determining it by the heading and content you generated.
+        11. if iconCount->({len(iconsCount)}) is 0 then do not add iconIntents key in the final json.
+        12. if iconCount->({len(iconsCount)}) is greater than 0 then give an array of {len(iconsCount)} strings for iconIntents in a json key <iconIntents> and the rest of the content in json key <replacementContent>.
+        13. if iconCount->({len(iconsCount)}) is 0 then give only the content in json key <replacementContent>.
         ### Output Format
         - Output **strictly valid JSON only**.
+        - <replacementContent> key contains the mapping of placeholders to rewritten text.
+        - <iconIntents> key (if applicable) contains an array of icon intent strings.
         - Keys = exact placeholder text from the provided list.
         - Values = strings or string arrays depending on placeholder type.
         - No markdown, no explanations, no extra commentary.
         """
 
-    uploadedFile = client.files.upload(file=download_image(req.imageUrl))
-    response = client.models.generate_content(
-        model="gemini-2.0-flash",
-        contents=[prompt,uploadedFile]
+    image_base64 = download_image(req.imageUrl)
+    response = client.chat.completions.create(
+        model="gpt-5-mini",
+        response_format={"type": "json_object"},
+        messages=[
+            {
+                "role": "system",
+                "content": "You are a precise PowerPoint content generator that strictly outputs valid JSON."
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": image_base64
+                        }
+                    }
+                ]
+            }
+        ],
+        temperature=0.7
     )
-    cleanedJson = json.loads((response.text.strip("`")).replace("json","",1).strip())
+    raw_output = response.choices[0].message.content
+    cleanedJson = json.loads(raw_output.strip("`").replace("json","",1).strip())
+    
     print("\n----- Prompted ----",prompt,"\n---end prompt---","\n------\nGenerated JSON:", cleanedJson,"\n------\n")
+    if "iconIntents" in cleanedJson:
+        print("Icons to be replaced:", cleanedJson["iconIntents"])
+        iconIntents = cleanedJson.pop("iconIntents")
+        for i in range(len(iconsCount)):
+            print("Replacing icon with intent:", iconIntents[i])
+            replace_icons(pptx_reference, 0, iconsCount[i]['shape'], get_icon(iconIntents[i])['result']['hits'][0]['_id'])
+    if "replacementContent" in cleanedJson:
+        cleanedJson = cleanedJson["replacementContent"]
+
     if not validateJson(cleanedJson, textBoxList):
         if os.path.exists(pptx_path):
             os.remove(pptx_path)
         return {"error": "Error Generating PPTX, Content too short for the template. Please provide more detailed content."}
     else:
-        updated_pptx =updateTemplatePlaceholders(pptx_path, 0, cleanedJson)
+        updated_pptx = updateTemplatePlaceholders(pptx_reference, 0, cleanedJson)
 
         # Step 3: Generate unique filename
         unique_id = uuid.uuid4().hex[:8]  # short UUID
@@ -424,7 +597,7 @@ def generate_ppt(req: PPTRequest):
             os.remove(pptx_path)
 
         # Step 4: Return public URL
-        file_url = f"{DOMAIN_NAME}{GENERATED_DIR}/{public_filename}"
+        file_url = f"{DOMAIN_NAME}api/{GENERATED_DIR}/{public_filename}"
         return {"file_url": file_url}
 
 @app.post("/upload-files/")
@@ -444,7 +617,57 @@ async def upload_files(files: List[UploadFile] = File(...)):
         os.chmod(file_path, 0o755)
 
         # Build file URL
-        file_url = f"{DOMAIN_NAME}{UPLOAD_DIR}/{filename}"
+        file_url = f"{DOMAIN_NAME}api/{UPLOAD_DIR}/{filename}"
         saved_files.append({"filename": filename, "url": file_url})
 
     return {"uploaded": saved_files}
+
+@app.post("/consolidate-slides")
+def consolidate_slides(payload: ConsolidateSlidesRequest):
+    if not payload.ppt_paths:
+        raise HTTPException(status_code=400, detail="ppt_paths cannot be empty")
+
+    final_prs = None
+    i = 0
+    for ppt_path in payload.ppt_paths:
+        x = ""
+        if(os.path.exists(os.path.join(GENERATED_DIR, *ppt_path.split('/')[-1:]))):
+            x = os.path.join(GENERATED_DIR, *ppt_path.split('/')[-1:])
+        elif(os.path.exists(os.path.join(UPLOAD_DIR, *ppt_path.split('/')[-1:]))):
+            x = os.path.join(UPLOAD_DIR, *ppt_path.split('/')[-1:])
+        else:
+            raise HTTPException(
+                status_code=404,
+                detail=f"PPT not found: {x}"
+            )
+
+        src_prs = Presentation(x)
+
+        if final_prs is None:
+            final_prs = Presentation(x)
+            # remove_all_slides(final_prs)
+            final_prs.slide_width = src_prs.slide_width
+            final_prs.slide_height = src_prs.slide_height
+            # remove_all_slides(final_prs)
+
+        if i != 0:
+            for slide in src_prs.slides:
+                copy_slide(slide, final_prs)
+        i += 1
+
+    output_filename = f"consolidated_{uuid.uuid4().hex}.pptx"
+    output_path = os.path.join(GENERATED_DIR, output_filename)
+
+    final_prs.save(output_path)
+    file_url = f"{DOMAIN_NAME}api/{GENERATED_DIR}/{output_filename}"
+    return {
+        "message": "Slides consolidated successfully",
+        "output_path": file_url,
+        "total_slides": len(final_prs.slides)
+    }
+
+def remove_all_slides(prs):
+    slide_ids = list(prs.slides._sldIdLst)
+    for slide_id in slide_ids:
+        prs.slides._sldIdLst.remove(slide_id)
+
