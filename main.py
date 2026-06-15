@@ -6,9 +6,9 @@ from pptx import Presentation
 import json
 import requests
 import tempfile
+import logging
 from datetime import datetime
 from fastapi.middleware.cors import CORSMiddleware
-import uuid
 from fastapi.staticfiles import StaticFiles
 import shutil
 from typing import List
@@ -60,6 +60,12 @@ class ConsolidateSlidesRequest(BaseModel):
 
 # Initialize OPENAI client
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+logger = logging.getLogger(__name__)
+
+def safe_filename(name: str) -> str:
+    return Path(name).name.replace("..", "_")
+
 
 def copy_slide(source_slide, target_prs):
     blank_layout = target_prs.slide_layouts[6]
@@ -581,8 +587,8 @@ def generate_ppt(req: PPTRequest):
         updated_pptx = updateTemplatePlaceholders(pptx_reference, 0, cleanedJson)
 
         # Step 3: Generate unique filename
-        unique_id = uuid.uuid4().hex[:8]  # short UUID
-        public_filename = f"presentation_{unique_id}.pptx"
+        unique_id = datetime.now().strftime('%Y_%m_%d_%H_%M_%S')
+        public_filename = f"presentation_slide_{unique_id}.pptx"
         public_path = os.path.join(GENERATED_DIR, public_filename)
 
         # Move to public folder
@@ -606,7 +612,7 @@ async def upload_files(files: List[UploadFile] = File(...)):
 
     for file in files:
         # Always use the original filename
-        filename = file.filename
+        filename = safe_filename(file.filename)
         file_path = os.path.join(UPLOAD_DIR, filename)
 
         # "wb" mode automatically replaces file if it already exists
@@ -655,7 +661,7 @@ def consolidate_slides(payload: ConsolidateSlidesRequest):
                 copy_slide(slide, final_prs)
         i += 1
 
-    output_filename = f"consolidated_{uuid.uuid4().hex}.pptx"
+    output_filename = f"consolidated_slides_{datetime.now().strftime('%Y_%m_%d_%H_%M_%S')}.pptx"
     output_path = os.path.join(GENERATED_DIR, output_filename)
 
     final_prs.save(output_path)
